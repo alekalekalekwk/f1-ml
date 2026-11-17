@@ -111,6 +111,26 @@ def write_chart(df: pd.DataFrame, path: Path, title: str, subtitle: str) -> None
     plt.close(fig)
 
 
+def export_prediction(df: pd.DataFrame, year: int, stem: str,
+                      from_qualifying: bool) -> tuple[Path, Path]:
+    """Write outputs/<stem>.xlsx and outputs/<stem>.png; return both paths."""
+    df = df.sort_values("win_probability", ascending=False)
+    event = df["event_name"].iloc[0]
+    title = f"Who wins the {year} {event}?"
+    winner = df[df["actual_position"] == 1]
+    subtitle = "Model win probability per driver"
+    if from_qualifying:
+        subtitle += ", grid from qualifying"
+    if not winner.empty:
+        subtitle += f"  ·  actual winner: {winner['driver_name'].iloc[0]}"
+
+    OUT_DIR.mkdir(exist_ok=True)
+    xlsx, png = OUT_DIR / f"{stem}.xlsx", OUT_DIR / f"{stem}.png"
+    write_excel(df, xlsx, f"{year} {event}: predicted win probability")
+    write_chart(df, png, title, subtitle)
+    return xlsx, png
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -122,19 +142,7 @@ def main() -> None:
 
     stem = f"prediction_{args.year}_{args.round_no}" + ("_quali" if args.from_qualifying else "")
     df = load_prediction(OUT_DIR / f"{stem}.csv")
-
-    event = df["event_name"].iloc[0]
-    title = f"Who wins the {args.year} {event}?"
-    winner = df[df["actual_position"] == 1]
-    subtitle = "Model win probability per driver"
-    if args.from_qualifying:
-        subtitle += ", grid from qualifying"
-    if not winner.empty:
-        subtitle += f"  ·  actual winner: {winner['driver_name'].iloc[0]}"
-
-    xlsx, png = OUT_DIR / f"{stem}.xlsx", OUT_DIR / f"{stem}.png"
-    write_excel(df, xlsx, f"{args.year} {event}: predicted win probability")
-    write_chart(df, png, title, subtitle)
+    xlsx, png = export_prediction(df, args.year, stem, args.from_qualifying)
 
     print(f"saved {xlsx.relative_to(ROOT)}")
     print(f"saved {png.relative_to(ROOT)}")

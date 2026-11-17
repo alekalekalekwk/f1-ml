@@ -29,6 +29,10 @@ MODEL_FILE = ROOT / "data" / "model.joblib"
 OUT_DIR = ROOT / "outputs"
 
 
+class PredictionError(Exception):
+    """A prediction cannot be made yet; the message is meant for the user."""
+
+
 def qualifying_rows(year: int, round_no: int) -> pd.DataFrame:
     """Rows for a race built from its qualifying result (grid = quali position)."""
     import fastf1
@@ -40,12 +44,13 @@ def qualifying_rows(year: int, round_no: int) -> pd.DataFrame:
     try:
         session.load(laps=False, telemetry=False, weather=False, messages=False)
     except Exception as exc:
-        sys.exit(f"Qualifying for {year} round {round_no} is not available yet ({exc}). "
-                 "Run this again after qualifying.")
+        raise PredictionError(
+            f"Qualifying for {year} round {round_no} is not available yet ({exc}). "
+            "Run this again after qualifying.") from exc
     res = session.results
     if res is None or res.empty or res["Position"].isna().all():
-        sys.exit(f"No qualifying result yet for {year} round {round_no}. "
-                 "Run this again after qualifying.")
+        raise PredictionError(f"No qualifying result yet for {year} round {round_no}. "
+                              "Run this again after qualifying.")
 
     rows = pd.DataFrame({
         "year": year,
@@ -86,20 +91,22 @@ def race_features(year: int, round_no: int, from_qualifying: bool) -> tuple[pd.D
     return race, source
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--year", type=int, required=True)
-    parser.add_argument("--round", type=int, required=True, dest="round_no")
-    parser.add_argument("--from-qualifying", action="store_true",
-                        help="use the qualifying order as grid even if the race is in the data")
-    args = parser.parse_args()
+def output_stem(year: int, round_no: int, from_qualifying: bool) -> str:
+    return f"prediction_{year}_{round_no}" + ("_quali" if from_qualifying else "")
 
+
+def predict_race(year: int, round_no: int,
+                 from_qualifying: bool = False) -> tuple[pd.DataFrame, str, str]:
+    """Win probability per driver, sorted best first.
+
+    Returns (prediction table, grid source, model name).
+    Raises PredictionError when there is no model or no grid yet.
+    """
     if not MODEL_FILE.exists():
-        sys.exit("No model found. Run `python src/train.py` first.")
+        raise PredictionError("No model found. Run `python src/train.py` first.")
     bundle = joblib.load(MODEL_FILE)
 
-    race, source = race_features(args.year, args.round_no, args.from_qualifying)
+    race, source = race_features(year, round_no, from_qualifying)
     proba = bundle["model"].predict_proba(race[bundle["features"]])[:, 1]
     total = proba.sum()
     race["win_probability"] = proba / total if total > 0 else 1 / len(race)
@@ -109,15 +116,54 @@ def main() -> None:
            [["predicted_rank", "year", "round", "event_name", "driver", "driver_name",
              "team", "grid", *[f for f in bundle["features"] if f != "grid"],
              "win_probability", "Position"]]
-           .rename(columns={"Position": "actual_position"}))
+           .rename(columns={"Position": "actual_position"})
+           .reset_index(drop=True))
+    return out, source, bundle["name"]
 
+
+def save_prediction(out: pd.DataFrame, year: int, round_no: int,
+                    from_qualifying: bool) -> Path:
     OUT_DIR.mkdir(exist_ok=True)
-    suffix = "_quali" if args.from_qualifying else ""
-    out_file = OUT_DIR / f"prediction_{args.year}_{args.round_no}{suffix}.csv"
+    out_file = OUT_DIR / f"{output_stem(year, round_no, from_qualifying)}.csv"
     out.to_csv(out_file, index=False)
+    return out_file
+
+
+def upcoming_rounds(year: int) -> pd.DataFrame:
+    """Rounds of `year` that are not in the results data yet (round, event_name, event_date)."""
+    import fastf1
+
+    from fetch_data import setup_fastf1
+
+    setup_fastf1()
+    schedule = fastf1.get_event_schedule(year, include_testing=False)
+    history = load_results()
+    done = set(history.loc[history["year"] == year, "round"])
+    todo = schedule[~schedule["RoundNumber"].isin(done)]
+    return pd.DataFrame({
+        "round": todo["RoundNumber"].astype(int).values,
+        "event_name": todo["EventName"].values,
+        "event_date": pd.to_datetime(todo["EventDate"]).values,
+    })
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--year", type=int, required=True)
+    parser.add_argument("--round", type=int, required=True, dest="round_no")
+    parser.add_argument("--from-qualifying", action="store_true",
+                        help="use the qualifying order as grid even if the race is in the data")
+    args = parser.parse_args()
+
+    try:
+        out, source, model_name = predict_race(args.year, args.round_no, args.from_qualifying)
+    except PredictionError as exc:
+        sys.exit(str(exc))
+    out_file = save_prediction(out, args.year, args.round_no, args.from_qualifying)
 
     name = out["event_name"].iloc[0]
-    print(f"{args.year} round {args.round_no}: {name}  (model: {bundle['name']}, "
+    print(f"{args.year} round {args.round_no}: {name}  (model: {model_name}, "
           f"grid from {source})\n")
     show = out.head(10)[["predicted_rank", "driver_name", "team", "grid",
                          "win_probability", "actual_position"]]

@@ -62,6 +62,10 @@ streamlit run src/app.py                       # web app at http://localhost:850
 - **Upcoming race**: after qualifying, run `predict.py` for that round; the grid
   is taken from the qualifying order. `--from-qualifying` does the same for a
   past race (writes a separate `_quali` file).
+- **From the web app**: the *Prediction* tab predicts the race picked in the
+  sidebar (optionally with the qualifying grid) or an upcoming race, shows the
+  win probabilities and offers the CSV, Excel and PNG as downloads. It needs a
+  trained model (steps 2 and 4).
 - **After a new race**: run steps 1, 2 and 4 again to refresh data and model.
 - Every script has `--help`.
 
