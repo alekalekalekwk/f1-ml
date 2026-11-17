@@ -1,52 +1,117 @@
-# PLAN.md: F1 Race Winner Predictor
+# F1 Race Winner Predictor
 
-## RULE 0 (REPO LOCK)
-Work ONLY inside ~/f1-ml. Before EVERY step run `pwd` and `git remote -v` and confirm both are correct. If not, STOP and report.
+Predicts each driver's chance of winning a Formula 1 race from FastF1 race data
+(seasons 2022-2026), and exports the prediction as an Excel table and a chart.
+A small local web app lets you browse results and seasons.
 
-## RULES
-- Write ONE file per tool call. Never write big files at once.
-- Always do a full read_file before editing any existing file.
-- Never say "done" without evidence. Evidence for every sub-task:
-  1. the last ~15 lines of the output of the script you ran (or the error)
-  2. `git log --oneline -3`
-  3. `git status --short`
-- ONE commit per sub-task, conventional message (feat:, chore:, docs:).
-- After each sub-task: report evidence, then STOP and wait for me to say "next".
-- Do not push to GitHub until I say "push".
-- Do not install anything outside the project venv.
+![Example prediction: 2026 São Paulo Grand Prix](docs/example_prediction.png)
 
-## GOAL
-Python project that uses FastF1 race data to predict the probable winner of an F1 race, and exports the result as a spreadsheet (.xlsx) and a chart image (.png).
-Stack: Python 3, fastf1, pandas, scikit-learn, matplotlib, openpyxl. Data seasons: 2022-2026 (2026 is in progress; it brings new technical regulations and new teams, so treat it as a separate test).
+## How it works
 
-## STEPS
+1. **Data**: race results (driver, team, grid, finish, points) for every race
+   since 2022, pulled with [FastF1](https://docs.fastf1.dev/).
+2. **Features**, built for each driver in each race from earlier races only:
 
-### Step 1: Skeleton
-Create venv instructions, .gitignore (venv/, cache/, __pycache__/, .DS_Store, data/raw/), requirements.txt, folders src/ data/ outputs/ (with .gitkeep). Install deps in venv and show `pip list | grep -i -E "fastf1|pandas|scikit|matplotlib|openpyxl"`.
+   | Feature | Meaning |
+   |---|---|
+   | `grid` | starting position (pit-lane start = back of grid) |
+   | `driver_form_rank` | rank in this race's field by average finish over the driver's last 5 races |
+   | `team_form_rank` | rank in this race's field by the team's average points over its last 5 races |
+   | `driver_wins_10` | the driver's wins in their last 10 races |
 
-### Step 2: Fetch data
-src/fetch_data.py: using FastF1 with cache enabled in ./cache, pull race results (driver, team, GridPosition, Position, Points, year, round, event name). First test on ONE race only and show the output. Then run for 2022-2026 (only rounds whose race date is in the past), skip failed rounds with a logged warning, save to data/raw/results.csv. Show df.shape and head().
+   Ranks are relative to the other drivers in the same race, so they keep their
+   meaning when the pecking order changes (for example the 2026 regulations).
+   Renamed teams are mapped to one key (Alfa Romeo → Sauber → Audi,
+   AlphaTauri → RB, …) so team form carries over.
+3. **Model**: LogisticRegression, RandomForest and GradientBoosting are trained on
+   2022-2024 and tested on 2025 and on 2026 so far, never with a random split.
+   The best model on 2025 is saved; 2026 stays an untouched extra test.
+4. **Prediction**: the model's per-driver probabilities are normalized so they
+   add up to 100% across the field.
 
-### Step 3: Features
-src/features.py: read results.csv, build the label `won` (Position == 1) and features: GridPosition, driver's average finish over last 5 races, team's average points over last 5 races, driver's win count in prior races. NO DATA LEAKAGE: every feature must use only races BEFORE the current one. Team names change across seasons (e.g. Sauber -> Audi in 2026): map them to one team key so team form carries over correctly; brand-new teams (e.g. Cadillac) start with no history. Save to data/features.csv. Show shape and a leakage check explanation.
+## Setup
 
-### Step 4: Baseline
-src/baseline.py: baseline = "pole position (grid 1) wins". Evaluate separately on 2025 races and on 2026 races so far, and print how often it is right for each.
+Requires Python 3.11+ (developed on 3.13).
 
-### Step 5: Train v1
-src/train.py: LogisticRegression, TIME-BASED split (train 2022-2024, test 2025, extra test 2026 so far), never random. Print accuracy AND top-3 accuracy (is the real winner within the 3 drivers with highest predicted probability per race) for each test season. Compare to the baseline.
+```bash
+cd ~/f1-ml
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-### Step 6: Model comparison
-Add RandomForest and GradientBoosting to train.py (still one model per tool call when editing). Print a comparison table of all models vs baseline for 2025 and 2026. Pick the best model on 2025 (not 2026, to keep 2026 an honest extra test). Save the best model with joblib to data/model.joblib.
+FastF1 caches downloads in `./cache`. Raw data goes to `data/raw/`; both are
+ignored by git.
 
-### Step 7: Predict a race
-src/predict.py: CLI args --year --round. Load model, compute win probability for each driver in that race, normalize so probabilities sum to 1, save outputs/prediction_<year>_<round>.csv. If the race has not been run yet (upcoming 2026 rounds), take GridPosition from that weekend's qualifying session and build features from all races before it.
+## Usage
 
-### Step 8: Export
-src/export.py: from the prediction CSV, produce (a) outputs/prediction_<year>_<round>.xlsx with a clean formatted table (header style, column widths, percent format, sorted desc) and (b) outputs/prediction_<year>_<round>.png horizontal bar chart of win probability per driver with title. Show the file list in outputs/.
+Run from the project folder with the venv active, in this order:
 
-### Step 9: README
-README.md: project purpose, setup, how to run each script in order, results table, known limitations.
+```bash
+python src/fetch_data.py                       # 1. download race results -> data/raw/results.csv
+python src/features.py                         # 2. build features        -> data/features.csv
+python src/baseline.py                         # 3. "pole wins" baseline for 2025 and 2026
+python src/train.py                            # 4. train + compare models -> data/model.joblib
+python src/predict.py --year 2026 --round 20   # 5. predict one race      -> outputs/prediction_2026_20.csv
+python src/export.py  --year 2026 --round 20   # 6. Excel + chart         -> outputs/prediction_2026_20.xlsx/.png
+streamlit run src/app.py                       # web app at http://localhost:8501
+```
 
-### Step 10: Final check
-Run the full pipeline from a clean clone-like state (fresh venv not required, just rerun scripts) for one race, confirm outputs are generated, show `git log --oneline`. STOP and wait for my "push".
+- `fetch_data.py` is incremental: it only downloads races not yet in
+  `results.csv`. Use `python src/fetch_data.py --test` to try a single race.
+- **Upcoming race**: after qualifying, run `predict.py` for that round; the grid
+  is taken from the qualifying order. `--from-qualifying` does the same for a
+  past race (writes a separate `_quali` file).
+- **After a new race**: run steps 1, 2 and 4 again to refresh data and model.
+- Every script has `--help`.
+
+## Results
+
+Per-race accuracy: the model's top pick won. Top-3: the real winner was among
+the model's three most likely drivers. Baseline: "the driver on pole wins".
+
+| Model | 2025 accuracy | 2025 top-3 | 2026 accuracy | 2026 top-3 |
+|---|---|---|---|---|
+| Baseline (pole wins) | **66.7%** | 95.8% | **70.0%** | 90.0% |
+| LogisticRegression | 37.5% | 91.7% | 40.0% | 90.0% |
+| **RandomForest** (saved) | 45.8% | **100.0%** | 60.0% | **95.0%** |
+| GradientBoosting | 33.3% | 83.3% | 65.0% | 90.0% |
+
+2025: 24 races; 2026: 20 races (up to the São Paulo GP). Trained on 2022-2024.
+
+**Reading it:** the pole-sitter is still the best single guess for the winner.
+Where the model helps is the shortlist: its top 3 contained the winner in every
+2025 race and in 19 of 20 races in 2026, better than the top 3 on the grid.
+
+## Known limitations
+
+- **Small test sets.** One race is about 4-5% of a test season, so small
+  differences between models are not meaningful.
+- **Does not beat pole position on picking the exact winner.** The features
+  cannot tell when the pole-sitter will fail to win (strategy, safety cars,
+  reliability, weather, first-lap incidents).
+- **Few signals.** No qualifying pace gaps, practice or sprint results, tyre
+  strategy, weather, track type or reliability data.
+- **Qualifying grid ignores penalties.** For upcoming races the grid is the
+  qualifying order; grid penalties applied afterwards are not included.
+- **Regulation changes.** The model is trained on 2022-2024; the 2026 rules
+  reshuffled the field, so early-2026 form lags behind reality for a few races.
+- **New team names** must be added to `TEAM_KEYS` in `src/features.py`
+  (the script warns when it sees an unknown one).
+- **API limits.** FastF1 allows about 500 API calls per hour. A full first
+  download can hit it; `fetch_data.py` saves what it has and can simply be rerun
+  later. Without an F1 account, FastF1's extra live-timing data is unavailable;
+  race results still load.
+
+## Project layout
+
+```
+src/fetch_data.py   download race results with FastF1
+src/features.py     leakage-free features + leakage check
+src/baseline.py     pole-position baseline
+src/train.py        time-based training, model comparison, saves best model
+src/predict.py      win probabilities for one race
+src/export.py       formatted .xlsx and .png chart
+src/app.py          Streamlit web app
+PLAN.md             the step-by-step build plan
+```
