@@ -1,0 +1,8 @@
+[server]
+# Local-only app: listen on this machine, not the whole network.
+address = "localhost"
+headless = true
+
+[browser]
+# Don't send usage statistics to Streamlit.
+gatherUsageStats = false
