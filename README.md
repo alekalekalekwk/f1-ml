@@ -100,8 +100,9 @@ Where the model helps is the shortlist: its top 3 contained the winner in every
   (the script warns when it sees an unknown one).
 - **API limits.** FastF1 allows about 500 API calls per hour. A full first
   download can hit it; `fetch_data.py` saves what it has and can simply be rerun
-  later. Without an F1 account, FastF1's extra live-timing data is unavailable;
-  race results still load.
+  later. No F1 account is needed: the scripts turn off FastF1's F1-account
+  sign-in (it would otherwise ask for an email and password in a terminal), and
+  race and qualifying results load from the Jolpica/Ergast API without one.
 
 ## Project layout
 

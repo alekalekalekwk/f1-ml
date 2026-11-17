@@ -16,7 +16,7 @@ from pathlib import Path
 
 import fastf1
 import pandas as pd
-from fastf1.exceptions import RateLimitExceededError
+from fastf1.exceptions import F1AuthError, RateLimitExceededError
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "cache"
@@ -46,10 +46,34 @@ def setup_logging() -> None:
     log.propagate = False
 
 
+def _no_f1_login():
+    raise F1AuthError("F1 account sign-in is disabled in this project")
+
+
+def disable_f1_login() -> None:
+    """Never sign in to (or prompt for) a Formula 1 account.
+
+    In an interactive terminal FastF1 asks for an F1 account email and password
+    before calling the F1 live-timing API. This project only needs race and
+    qualifying results, which come from the Jolpica/Ergast API without an
+    account, so the sign-in is replaced by one that fails at once. FastF1 then
+    continues without authentication, exactly as in a non-interactive run.
+    Relies on FastF1 internals (fastf1==3.9.0 is pinned in requirements.txt).
+    """
+    try:
+        from fastf1.internals import f1account
+        for method in f1account.AUTH_METHODS:
+            f1account._AUTHENTICATORS[method] = _no_f1_login
+    except (ImportError, AttributeError):
+        log.warning("Could not disable the F1 account sign-in for this FastF1 "
+                    "version; if asked for an F1 email, press Ctrl+C.")
+
+
 def setup_fastf1() -> None:
     CACHE_DIR.mkdir(exist_ok=True)
     fastf1.Cache.configure(cache_dir=str(CACHE_DIR))
     fastf1.set_log_level(logging.ERROR)
+    disable_f1_login()
 
 
 def fetch_race(year: int, round_no: int) -> pd.DataFrame:
